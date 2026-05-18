@@ -629,10 +629,12 @@ function renderTrendChart() {
     const hasData = data.some(d => d.status !== 'missed');
 
     if (!hasData) {
+        container.classList.add('trend-chart-empty');
         container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📝</div><div>暂无打卡记录</div></div>';
         return;
     }
 
+    container.classList.remove('trend-chart-empty');
     const maxHeight = 80;
     let html = '<div class="trend-chart">';
 

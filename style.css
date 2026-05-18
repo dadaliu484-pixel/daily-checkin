@@ -804,6 +804,19 @@ body {
     margin-bottom: 6px;
 }
 
+#trendChart.trend-chart-empty {
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+    height: auto;
+    padding: 12px 0;
+    overflow: hidden;
+}
+
+#trendChart.trend-chart-empty > .empty-state {
+    padding: 0 20px;
+}
+
 .trend-col {
     flex: 1;
     min-width: 8px;
