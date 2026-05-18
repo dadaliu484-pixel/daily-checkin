@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#4F46E5">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="每日打卡">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-512.png">
+    <title>每日打卡</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 顶部导航栏 -->
+        <header class="header">
+            <div class="header-title">📅 每日打卡</div>
+            <div class="header-date" id="currentDate"></div>
+        </header>
+
+        <!-- 设置页面 -->
+        <div id="setupPage" class="page" style="display:none;">
+            <div class="setup-container">
+                <div class="setup-icon">👋</div>
+                <h2>欢迎使用每日打卡</h2>
+                <p class="setup-desc">请输入您的姓名开始使用</p>
+                <div class="input-group">
+                    <input type="text" id="userNameInput" placeholder="请输入您的姓名" maxlength="10">
+                </div>
+                <button class="btn btn-primary" onclick="saveUserName()">开始打卡</button>
+            </div>
+        </div>
+
+        <!-- 主页面 -->
+        <div id="mainPage" class="page">
+            <!-- 用户信息栏 -->
+            <div class="user-bar">
+                <div class="user-info">
+                    <div class="user-avatar" id="userAvatar">👤</div>
+                    <div>
+                        <div class="user-name" id="displayName">用户</div>
+                        <div class="user-status" id="userStatus">今日未打卡</div>
+                    </div>
+                </div>
+                <button class="btn-icon" onclick="resetUser()" title="切换用户">🔄</button>
+            </div>
+
+            <!-- 打卡卡片 -->
+            <div class="checkin-card">
+                <div class="checkin-time" id="currentTime">00:00:00</div>
+                <div class="checkin-date" id="todayDate"></div>
+                <div class="checkin-weekday" id="todayWeekday"></div>
+                
+                <div class="checkin-btn-group">
+                    <button class="btn btn-checkin" id="signInBtn" onclick="signIn()">
+                        <span class="btn-icon-large">✅</span>
+                        <span>签到上班</span>
+                    </button>
+                    <button class="btn btn-checkout" id="signOutBtn" onclick="signOut()">
+                        <span class="btn-icon-large">🏁</span>
+                        <span>签退下班</span>
+                    </button>
+                </div>
+
+                <div class="today-record" id="todayRecord">
+                    <!-- 今日打卡记录动态显示 -->
+                </div>
+            </div>
+
+            <!-- 统计卡片 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalDays">0</div>
+                    <div class="stat-label">总打卡天数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="consecutiveDays">0</div>
+                    <div class="stat-label">连续打卡</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="monthDays">0</div>
+                    <div class="stat-label">本月打卡</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="thisWeek">0</div>
+                    <div class="stat-label">本周打卡</div>
+                </div>
+            </div>
+
+            <!-- 打卡记录 -->
+            <div class="section">
+                <div class="section-header">
+                    <h3>📋 打卡记录</h3>
+                    <button class="btn-text" onclick="toggleCalendar()">📅 日历视图</button>
+                </div>
+                
+                <!-- 日历视图 -->
+                <div id="calendarView" class="calendar-container" style="display:none;">
+                    <div class="calendar-nav">
+                        <button class="btn-icon" onclick="changeMonth(-1)">◀</button>
+                        <span id="calendarMonthTitle">2026年5月</span>
+                        <button class="btn-icon" onclick="changeMonth(1)">▶</button>
+                    </div>
+                    <div class="calendar-weekdays">
+                        <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+                    </div>
+                    <div class="calendar-days" id="calendarDays">
+                    </div>
+                </div>
+
+                <div class="records-list" id="recordsList">
+                    <!-- 打卡记录动态加载 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 统计页面 -->
+        <div id="historyPage" class="page">
+            <!-- 统计概览 -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="hTotalDays">0</div>
+                    <div class="stat-label">总打卡天数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="hConsecutiveDays">0</div>
+                    <div class="stat-label">最长连续</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="hTotalHours">0h</div>
+                    <div class="stat-label">累计工时</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="hCompletionRate">-</div>
+                    <div class="stat-label">签退完成率</div>
+                </div>
+            </div>
+
+            <!-- 本周工时柱状图 -->
+            <div class="section">
+                <h3>📊 本周工时</h3>
+                <div class="bar-chart" id="weeklyChart">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📝</div>
+                        <div>本周暂无打卡记录</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 近30天趋势 -->
+            <div class="section">
+                <h3>📈 近30天打卡趋势</h3>
+                <div class="trend-chart" id="trendChart">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📝</div>
+                        <div>暂无打卡记录</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 月度统计 -->
+            <div class="section">
+                <h3>📅 月度统计</h3>
+                <div class="monthly-table" id="monthlyTable">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📝</div>
+                        <div>暂无打卡记录</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 平均数据 -->
+            <div class="section">
+                <h3>⏰ 平均数据</h3>
+                <div class="averages-grid" id="averagesGrid">
+                    <div class="avg-item">
+                        <div class="avg-value" id="avgSignIn">--:--</div>
+                        <div class="avg-label">平均签到时间</div>
+                    </div>
+                    <div class="avg-item">
+                        <div class="avg-value" id="avgSignOut">--:--</div>
+                        <div class="avg-label">平均签退时间</div>
+                    </div>
+                    <div class="avg-item">
+                        <div class="avg-value" id="avgDuration">--</div>
+                        <div class="avg-label">平均工时</div>
+                    </div>
+                    <div class="avg-item">
+                        <div class="avg-value" id="earliestSignIn">--:--</div>
+                        <div class="avg-label">最早签到</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部导航 -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" onclick="showTab('main', this)">
+                <span>🏠</span>
+                <span>首页</span>
+            </button>
+            <button class="nav-item" onclick="showTab('history', this)">
+                <span>📊</span>
+                <span>统计</span>
+            </button>
+            <button class="nav-item" onclick="showSettings()">
+                <span>⚙️</span>
+                <span>设置</span>
+            </button>
+
+        </nav>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4F46E5;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#3730A3;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="102.4" fill="url(#grad)"/>
+  <text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" 
+        font-size="256" font-family="Arial" fill="white">📅</text>
+  <text x="50%" y="78%" dominant-baseline="middle" text-anchor="middle" 
+        font-size="92.16" font-family="Arial" fill="rgba(255,255,255,0.8)" font-weight="bold">打卡</text>
+</svg>
