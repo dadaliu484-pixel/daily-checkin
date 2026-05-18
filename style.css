@@ -794,6 +794,16 @@ body {
     overflow-x: auto;
 }
 
+.trend-chart > .empty-state {
+    width: 100%;
+    padding: 16px 20px;
+}
+
+.trend-chart > .empty-state .empty-state-icon {
+    font-size: 36px;
+    margin-bottom: 6px;
+}
+
 .trend-col {
     flex: 1;
     min-width: 8px;
