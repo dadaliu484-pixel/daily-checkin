@@ -79,7 +79,17 @@ function showToast(message, icon = '✅') {
         toast.className = 'toast';
         document.body.appendChild(toast);
     }
-    toast.innerHTML = `<div class="toast-icon">${icon}</div><div>${message}</div>`;
+    toast.textContent = '';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'toast-icon';
+    iconEl.textContent = icon;
+
+    const messageEl = document.createElement('div');
+    messageEl.textContent = message;
+
+    toast.appendChild(iconEl);
+    toast.appendChild(messageEl);
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 1500);
 }
