@@ -1238,6 +1238,17 @@ function clearAllRecords() {
     }
 }
 
+function resetRecordsForTesting() {
+    if (!confirm('确定清空所有项目的打卡记录，从零开始测试吗？')) return;
+    localStorage.removeItem('checkin_records');
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
+    showToast('记录已清空，可以重新测试', '🧪');
+}
+
 // ===== 设置功能 =====
 function toggleRemind(enabled) {
     const settings = DB.getSettings();
