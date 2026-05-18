@@ -2,7 +2,7 @@
 // 每日打卡 - Service Worker
 // ==========================================
 
-const CACHE_NAME = 'checkin-cache-v2';
+const CACHE_NAME = 'checkin-cache-v3';
 const ASSETS = [
     './',
     './index.html',

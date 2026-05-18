@@ -794,27 +794,25 @@ body {
     overflow-x: auto;
 }
 
-.trend-chart > .empty-state {
-    width: 100%;
-    padding: 16px 20px;
-}
-
-.trend-chart > .empty-state .empty-state-icon {
-    font-size: 36px;
-    margin-bottom: 6px;
-}
-
 #trendChart.trend-chart-empty {
-    align-items: center;
-    justify-content: center;
+    display: grid;
+    place-items: center;
     min-height: 120px;
     height: auto;
-    padding: 12px 0;
+    padding: 16px 0;
     overflow: hidden;
 }
 
-#trendChart.trend-chart-empty > .empty-state {
-    padding: 0 20px;
+.trend-empty-state {
+    width: 100%;
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.trend-empty-icon {
+    font-size: 36px;
+    line-height: 1;
+    margin-bottom: 10px;
 }
 
 .trend-col {
