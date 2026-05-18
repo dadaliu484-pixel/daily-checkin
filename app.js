@@ -5,39 +5,97 @@
 
 // 关闭网页再打开，签到状态依然保持
 
+const DEFAULT_PROJECTS = [
+    { id: 'work', name: '上班', mode: 'range' },
+    { id: 'fitness', name: '健身', mode: 'single' }
+];
+
 // ===== 数据管理 - 使用 localStorage 持久化存储 =====
 const DB = {
-    getRecords() {
-        const data = localStorage.getItem('checkin_records');
-        return data ? JSON.parse(data) : {};
+    getRecords(projectId = this.getActiveProjectId()) {
+        const allRecords = this.getAllRecords();
+        return allRecords[projectId] || {};
     },
 
-    saveRecords(records) {
-        localStorage.setItem('checkin_records', JSON.stringify(records));
+    saveRecords(records, projectId = this.getActiveProjectId()) {
+        const allRecords = this.getAllRecords();
+        allRecords[projectId] = records;
+        localStorage.setItem('checkin_records', JSON.stringify(allRecords));
+    },
+
+    getAllRecords() {
+        const data = localStorage.getItem('checkin_records');
+        const records = data ? JSON.parse(data) : {};
+        const values = Object.values(records);
+        const isLegacyRecords = values.some(record => record && (record.signIn || record.signOut || record.completedAt || record.date));
+        return isLegacyRecords ? { work: records } : records;
     },
 
     getSettings() {
         const data = localStorage.getItem('checkin_settings');
-        return data ? JSON.parse(data) : {
+        const settings = data ? JSON.parse(data) : {
             name: '',
             remindEnabled: false,
             remindTime: '08:00'
         };
+        settings.projects = this.normalizeProjects(settings.projects);
+        if (!settings.activeProjectId || !settings.projects.some(p => p.id === settings.activeProjectId)) {
+            settings.activeProjectId = settings.projects[0].id;
+        }
+        return settings;
     },
 
     saveSettings(settings) {
+        settings.projects = this.normalizeProjects(settings.projects);
+        if (!settings.activeProjectId || !settings.projects.some(p => p.id === settings.activeProjectId)) {
+            settings.activeProjectId = settings.projects[0].id;
+        }
         localStorage.setItem('checkin_settings', JSON.stringify(settings));
     },
 
-    getDayRecord(dateStr) {
-        const records = this.getRecords();
+    normalizeProjects(projects) {
+        if (!Array.isArray(projects) || projects.length === 0) {
+            return DEFAULT_PROJECTS.map(project => ({ ...project }));
+        }
+        return projects
+            .filter(project => project && project.id && project.name)
+            .map(project => ({
+                id: project.id,
+                name: project.name,
+                mode: project.mode === 'single' ? 'single' : 'range'
+            }));
+    },
+
+    getProjects() {
+        return this.getSettings().projects;
+    },
+
+    getActiveProjectId() {
+        return this.getSettings().activeProjectId;
+    },
+
+    getActiveProject() {
+        const settings = this.getSettings();
+        return settings.projects.find(p => p.id === settings.activeProjectId) || settings.projects[0];
+    },
+
+    setActiveProject(projectId) {
+        const settings = this.getSettings();
+        if (settings.projects.some(p => p.id === projectId)) {
+            settings.activeProjectId = projectId;
+            this.saveSettings(settings);
+        }
+    },
+
+    getDayRecord(dateStr, projectId = this.getActiveProjectId()) {
+        const records = this.getRecords(projectId);
         return records[dateStr] || null;
     },
 
-    setDayRecord(dateStr, record) {
-        const records = this.getRecords();
+    setDayRecord(dateStr, record, projectId = this.getActiveProjectId()) {
+        const records = this.getRecords(projectId);
         records[dateStr] = record;
-        this.saveRecords(records);
+        this.saveRecords(records, projectId);
     }
 };
 
@@ -71,6 +129,24 @@ function getToday() {
     return formatDate(new Date());
 }
 
+function getModeLabel(mode) {
+    return mode === 'single' ? '单次打卡' : '签到/签退';
+}
+
+function escapeHTML(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[char]));
+}
+
+function createProjectId() {
+    return `project_${Date.now()}`;
+}
+
 function getSignOutDate(record) {
     return record.signOutDate || record.date;
 }
@@ -89,6 +165,14 @@ function getWorkDurationMinutes(record) {
     }
 
     return Math.max(0, Math.round((signOutDateTime - signInDateTime) / (1000 * 60)));
+}
+
+function isRecordStarted(record) {
+    return !!(record && (record.signIn || record.completedAt));
+}
+
+function isRecordCompleted(record) {
+    return !!(record && (record.signOut || record.completedAt));
 }
 
 function findLatestOpenRecordDate(upToDateStr = getToday()) {
@@ -130,6 +214,7 @@ function initApp() {
         document.getElementById('setupPage').style.display = 'none';
         document.getElementById('mainPage').classList.add('active');
         loadUserInfo();
+        renderProjectSelector();
         loadTodayInfo();  // 从 localStorage 读取今日打卡状态
         updateStats();
         loadRecords();
@@ -156,15 +241,6 @@ function saveUserName() {
     initApp();
 }
 
-function resetUser() {
-    if (confirm('确定要切换用户吗？当前打卡记录将保留。')) {
-        const settings = DB.getSettings();
-        settings.name = '';
-        DB.saveSettings(settings);
-        initApp();
-    }
-}
-
 function loadUserInfo() {
     const settings = DB.getSettings();
     const name = settings.name;
@@ -173,6 +249,29 @@ function loadUserInfo() {
     const avatarEmojis = ['👤', '😊', '🌟', '💪', '🎯', '🚀', '🌈', '⭐'];
     const avatarIndex = name.length % avatarEmojis.length;
     document.getElementById('userAvatar').textContent = avatarEmojis[avatarIndex];
+}
+
+function renderProjectSelector() {
+    const selector = document.getElementById('projectSelector');
+    if (!selector) return;
+
+    const settings = DB.getSettings();
+    selector.innerHTML = settings.projects.map(project => `
+        <button class="project-tab ${project.id === settings.activeProjectId ? 'active' : ''}" onclick="switchProject('${project.id}')">
+            <span>${escapeHTML(project.name)}</span>
+            <small>${getModeLabel(project.mode)}</small>
+        </button>
+    `).join('');
+}
+
+function switchProject(projectId) {
+    DB.setActiveProject(projectId);
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
 }
 
 function updateHeaderDate() {
@@ -195,13 +294,14 @@ function startClock() {
 function loadTodayInfo() {
     const now = new Date();
     const today = getToday();
+    const project = DB.getActiveProject();
     
     document.getElementById('todayDate').textContent = today;
     document.getElementById('todayWeekday').textContent = getWeekday(now);
 
-    // 从 localStorage 读取今日打卡记录；如果有跨天未签退记录，优先展示它用于签退
+    // 从 localStorage 读取当前项目的今日记录；签到/签退项目优先展示跨天未签退记录
     let record = DB.getDayRecord(today);
-    if (!record || !record.signIn) {
+    if (project.mode === 'range' && (!record || !record.signIn)) {
         const openRecordDate = findLatestOpenRecordDate(today);
         if (openRecordDate) {
             record = DB.getDayRecord(openRecordDate);
@@ -216,14 +316,31 @@ function updateTodayUI(record) {
     const signOutBtn = document.getElementById('signOutBtn');
     const todayRecord = document.getElementById('todayRecord');
     const statusEl = document.getElementById('userStatus');
+    const project = DB.getActiveProject();
+    const projectName = escapeHTML(project.name);
+    const signInText = signInBtn.querySelector('span:last-child');
+    const signOutText = signOutBtn.querySelector('span:last-child');
+    signOutBtn.style.display = project.mode === 'single' ? 'none' : '';
+    signInText.textContent = project.mode === 'single' ? '完成打卡' : '签到开始';
+    signOutText.textContent = '签退结束';
 
     if (!record) {
-        // 今日还未打卡 - 签到按钮可用，签退按钮禁用
         signInBtn.disabled = false;
         signOutBtn.disabled = true;
-        statusEl.textContent = '今日未打卡';
+        statusEl.textContent = `${project.name} 今日未打卡`;
         statusEl.style.color = 'var(--warning)';
-        todayRecord.innerHTML = '<div class="record-item"><span class="record-label">📌 今日尚未打卡，点击签到上班</span></div>';
+        todayRecord.innerHTML = `<div class="record-item"><span class="record-label">📌 ${projectName} 今日尚未打卡</span></div>`;
+        return;
+    }
+
+    if (project.mode === 'single') {
+        signInBtn.disabled = !!record.completedAt;
+        signOutBtn.disabled = true;
+        statusEl.textContent = record.completedAt ? `✅ ${project.name} 今日已完成` : `${project.name} 今日未打卡`;
+        statusEl.style.color = record.completedAt ? 'var(--success)' : 'var(--warning)';
+        todayRecord.innerHTML = record.completedAt
+            ? `<div class="record-item"><span class="record-label">✅ 完成打卡</span><span class="record-time record-type-signin">${record.completedAt}</span></div>`
+            : `<div class="record-item"><span class="record-label">📌 ${projectName} 今日尚未打卡</span></div>`;
         return;
     }
 
@@ -235,11 +352,11 @@ function updateTodayUI(record) {
     // 检查是否有签退记录
     if (record.signOut) {
         signOutBtn.disabled = true;  // 签退按钮禁用（已签退）
-        statusEl.textContent = '✅ 今日已完成打卡';
+        statusEl.textContent = `✅ ${project.name} 今日已完成`;
         statusEl.style.color = 'var(--success)';
     } else if (record.signIn) {
         signOutBtn.disabled = false; // 已签到未签退 - 签退按钮可用
-        statusEl.textContent = '✅ 已签到（未签退）';
+        statusEl.textContent = `✅ ${project.name} 已开始（未结束）`;
         statusEl.style.color = 'var(--success)';
     }
 
@@ -271,6 +388,25 @@ function signIn() {
     const today = getToday();
     const now = new Date();
     const time = formatTime(now);
+    const project = DB.getActiveProject();
+
+    if (project.mode === 'single') {
+        let record = DB.getDayRecord(today);
+        if (record && record.completedAt) {
+            showToast(`${project.name} 今天已经打卡过了！`, '⚠️');
+            return;
+        }
+        record = { date: today, completedAt: time };
+        DB.setDayRecord(today, record);
+
+        showToast(`${project.name} 打卡成功！${time}`, '✅');
+        updateTodayUI(record);
+        updateStats();
+        loadRecords();
+        updateCalendar();
+        if (currentTab === 'history') renderHistoryPage();
+        return;
+    }
 
     const openRecordDate = findLatestOpenRecordDate(today);
     if (openRecordDate && openRecordDate !== today) {
@@ -292,7 +428,7 @@ function signIn() {
     record.signIn = time;
     DB.setDayRecord(today, record);
     
-    showToast(`签到成功！${time}`, '✅');
+    showToast(`${project.name} 开始成功！${time}`, '✅');
     updateTodayUI(record);
     updateStats();
     loadRecords();
@@ -305,6 +441,12 @@ function signOut() {
     const today = getToday();
     const now = new Date();
     const time = formatTime(now);
+    const project = DB.getActiveProject();
+
+    if (project.mode === 'single') {
+        showToast(`${project.name} 不需要签退`, '⚠️');
+        return;
+    }
 
     const recordDate = findLatestOpenRecordDate(today);
     let record = recordDate ? DB.getDayRecord(recordDate) : null;
@@ -323,7 +465,7 @@ function signOut() {
     record.signOutDate = today;
     DB.setDayRecord(recordDate, record);
     
-    showToast(`签退成功！${time} 下班啦！`, '🏁');
+    showToast(`${project.name} 结束成功！${time}`, '🏁');
     loadTodayInfo();
     updateStats();
     loadRecords();
@@ -334,12 +476,13 @@ function signOut() {
 // ===== 统计功能 =====
 function updateStats() {
     const records = DB.getRecords();
+    const project = DB.getActiveProject();
     const today = getToday();
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
     
-    const days = Object.keys(records);
+    const days = Object.keys(records).filter(date => isRecordStarted(records[date]));
     const totalDays = days.length;
     document.getElementById('totalDays').textContent = totalDays;
 
@@ -361,7 +504,7 @@ function updateStats() {
     while (true) {
         const dateStr = formatDate(checkDate);
         const record = records[dateStr];
-        if (record && record.signIn) {
+        if (isRecordStarted(record)) {
             consecutive++;
             checkDate.setDate(checkDate.getDate() - 1);
         } else {
@@ -369,21 +512,26 @@ function updateStats() {
         }
     }
     document.getElementById('consecutiveDays').textContent = consecutive;
+    document.querySelectorAll('#mainPage .stat-label')[0].textContent = `${project.name}总天数`;
+    document.querySelectorAll('#mainPage .stat-label')[1].textContent = `${project.name}连续`;
+    document.querySelectorAll('#mainPage .stat-label')[2].textContent = `${project.name}本月`;
+    document.querySelectorAll('#mainPage .stat-label')[3].textContent = `${project.name}本周`;
 }
 
 // ===== 打卡记录列表 =====
 function loadRecords() {
     const records = DB.getRecords();
+    const project = DB.getActiveProject();
     const listEl = document.getElementById('recordsList');
     
-    const sortedDays = Object.keys(records).sort().reverse();
+    const sortedDays = Object.keys(records).filter(day => isRecordStarted(records[day])).sort().reverse();
     
     if (sortedDays.length === 0) {
         listEl.innerHTML = `
             <div class="empty-state">
                 <div class="empty-state-icon">📝</div>
                 <div>暂无打卡记录</div>
-                <div style="font-size:13px;margin-top:8px;">点击上方按钮开始打卡吧！</div>
+                <div style="font-size:13px;margin-top:8px;">点击上方按钮开始${escapeHTML(project.name)}打卡吧！</div>
             </div>
         `;
         return;
@@ -394,14 +542,17 @@ function loadRecords() {
     
     recentDays.forEach(day => {
         const record = records[day];
-        if (!record.signIn) return;
+        if (!isRecordStarted(record)) return;
 
         const dateObj = new Date(day + 'T00:00:00');
         const weekday = getWeekday(dateObj);
         const displayDate = day + ' ' + weekday;
         
         let badge, badgeClass;
-        if (record.signIn && record.signOut) {
+        if (project.mode === 'single') {
+            badge = '已完成 ✓';
+            badgeClass = 'badge-full';
+        } else if (record.signIn && record.signOut) {
             badge = '已完成 ✓';
             badgeClass = 'badge-full';
         } else {
@@ -410,7 +561,7 @@ function loadRecords() {
         }
 
         let workDuration = '';
-        if (record.signIn && record.signOut) {
+        if (project.mode === 'range' && record.signIn && record.signOut) {
             const diffMinutes = getWorkDurationMinutes(record);
             if (diffMinutes > 0) {
                 const hours = Math.floor(diffMinutes / 60);
@@ -424,8 +575,10 @@ function loadRecords() {
                 <div>
                     <div class="record-date">${displayDate}</div>
                     <div class="record-times">
-                        <span class="in-time">${record.signIn}</span>
-                        ${record.signOut ? ` → <span class="out-time">${getSignOutDate(record) !== day ? `${getSignOutDate(record)} ` : ''}${record.signOut}</span>` : ''}
+                        ${project.mode === 'single'
+                            ? `<span class="in-time">完成 ${record.completedAt}</span>`
+                            : `<span class="in-time">${record.signIn}</span>
+                        ${record.signOut ? ` → <span class="out-time">${getSignOutDate(record) !== day ? `${getSignOutDate(record)} ` : ''}${record.signOut}</span>` : ''}`}
                         ${workDuration}
                     </div>
                 </div>
@@ -483,9 +636,9 @@ function renderCalendar() {
         
         const record = records[dateStr];
         if (record) {
-            if (record.signIn && record.signOut) {
+            if (isRecordCompleted(record)) {
                 classes += ' checked';
-            } else if (record.signIn) {
+            } else if (isRecordStarted(record)) {
                 classes += ' partial';
             }
         }
@@ -515,20 +668,31 @@ function minutesToHM(minutes) {
     return m > 0 ? `${h}小时${m}分` : `${h}小时`;
 }
 
-function getRecordsWithDuration() {
-    const records = DB.getRecords();
+function getRecordsWithDuration(projectId = DB.getActiveProjectId()) {
+    const records = DB.getRecords(projectId);
     const result = [];
     Object.keys(records).forEach(date => {
         const r = records[date];
-        if (!r.signIn) return;
+        if (!isRecordStarted(r)) return;
         let duration = 0;
         if (r.signIn && r.signOut) {
             duration = getWorkDurationMinutes(r);
         }
-        result.push({ date, signIn: r.signIn, signOut: r.signOut, signOutDate: getSignOutDate(r), duration });
+        result.push({ date, signIn: r.signIn, signOut: r.signOut, completedAt: r.completedAt, signOutDate: getSignOutDate(r), duration });
     });
     result.sort((a, b) => a.date.localeCompare(b.date));
     return result;
+}
+
+function getProjectSummary(project) {
+    const records = getRecordsWithDuration(project.id);
+    const completed = records.filter(r => r.completedAt || r.duration > 0 || (r.signIn && r.signOut));
+    const totalMinutes = records.reduce((sum, r) => sum + Math.max(0, r.duration), 0);
+    return {
+        days: records.length,
+        completed: completed.length,
+        totalMinutes
+    };
 }
 
 function getWeeklyData() {
@@ -548,8 +712,8 @@ function getWeeklyData() {
         const record = records[dateStr];
         let duration = 0;
         let status = 'none';
-        if (record && record.signIn) {
-            if (record.signOut) {
+        if (isRecordStarted(record)) {
+            if (isRecordCompleted(record)) {
                 duration = getWorkDurationMinutes(record);
                 status = 'full';
             } else {
@@ -610,8 +774,8 @@ function getTrendData() {
         const dateStr = formatDate(d);
         const record = records[dateStr];
         let status = 'missed';
-        if (record && record.signIn) {
-            status = record.signOut ? 'full' : 'partial';
+        if (isRecordStarted(record)) {
+            status = isRecordCompleted(record) ? 'full' : 'partial';
         }
         data.push({
             date: dateStr,
@@ -732,6 +896,15 @@ function renderMonthlyTable() {
 }
 
 function renderAverages() {
+    const project = DB.getActiveProject();
+    if (project.mode === 'single') {
+        document.getElementById('avgSignIn').textContent = '--:--';
+        document.getElementById('avgSignOut').textContent = '--:--';
+        document.getElementById('avgDuration').textContent = '无时长';
+        document.getElementById('earliestSignIn').textContent = '--:--';
+        return;
+    }
+
     const allRecords = getRecordsWithDuration();
     const completed = allRecords.filter(r => r.duration > 0);
 
@@ -774,9 +947,32 @@ function renderAverages() {
     document.getElementById('earliestSignIn').textContent = `${earlyH}:${earlyM}`;
 }
 
+function renderProjectStatsList() {
+    const container = document.getElementById('projectStatsList');
+    if (!container) return;
+
+    const projects = DB.getProjects();
+    container.innerHTML = projects.map(project => {
+        const summary = getProjectSummary(project);
+        return `
+            <div class="project-stat-card">
+                <div>
+                    <div class="project-stat-name">${escapeHTML(project.name)}</div>
+                    <div class="project-stat-mode">${getModeLabel(project.mode)}</div>
+                </div>
+                <div class="project-stat-values">
+                    <span>${summary.days}天</span>
+                    <span>${summary.completed}次完成</span>
+                    ${project.mode === 'range' ? `<span>${minutesToHM(summary.totalMinutes)}</span>` : ''}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
 function updateHistoryOverview() {
-    const records = DB.getRecords();
     const allRecords = getRecordsWithDuration();
+    const project = DB.getActiveProject();
     const today = getToday();
     const now = new Date();
 
@@ -807,10 +1003,10 @@ function updateHistoryOverview() {
 
     // Total work hours
     const totalMinutes = allRecords.reduce((sum, r) => sum + Math.max(0, r.duration), 0);
-    document.getElementById('hTotalHours').textContent = Math.round(totalMinutes / 60) + 'h';
+    document.getElementById('hTotalHours').textContent = project.mode === 'single' ? '-' : Math.round(totalMinutes / 60) + 'h';
 
     // Completion rate (签退 / 签到)
-    const withSignOut = allRecords.filter(r => r.duration > 0).length;
+    const withSignOut = allRecords.filter(r => r.completedAt || r.duration > 0 || (r.signIn && r.signOut)).length;
     const rate = totalDays > 0 ? Math.round((withSignOut / totalDays) * 100) + '%' : '-';
     document.getElementById('hCompletionRate').textContent = rate;
 
@@ -820,6 +1016,7 @@ function updateHistoryOverview() {
 
 function renderHistoryPage() {
     updateHistoryOverview();
+    renderProjectStatsList();
     renderWeeklyChart();
     renderTrendChart();
     renderMonthlyTable();
@@ -859,10 +1056,22 @@ function showSettings() {
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;';
     
     const panel = document.createElement('div');
-    panel.style.cssText = 'background:var(--card);border-radius:var(--radius);padding:24px;width:85%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.3);';
+    panel.style.cssText = 'background:var(--card);border-radius:var(--radius);padding:24px;width:90%;max-width:380px;max-height:86vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3);';
     
     panel.innerHTML = `
         <h3 style="margin-bottom:16px;font-size:18px;text-align:center;">⚙️ 设置</h3>
+        <div class="settings-block">
+            <div class="settings-block-title">项目管理</div>
+            <div id="projectSettingsList"></div>
+            <div class="project-form">
+                <input type="text" id="newProjectName" placeholder="新项目名称" maxlength="12">
+                <select id="newProjectMode">
+                    <option value="range">签到/签退模式</option>
+                    <option value="single">单次打卡模式</option>
+                </select>
+                <button onclick="addProject()">添加项目</button>
+            </div>
+        </div>
         <div style="border-top:1px solid var(--border);padding-top:16px;margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">
                 <span style="font-size:15px;">🔔 打卡提醒</span>
@@ -884,6 +1093,7 @@ function showSettings() {
     overlay.onclick = function(e) { if (e.target === overlay) closeSettings(); };
     overlay.id = 'settingsOverlay';
     document.body.appendChild(overlay);
+    renderProjectSettings();
 }
 
 function closeSettings() {
@@ -894,6 +1104,97 @@ function closeSettings() {
     const navItems = document.querySelectorAll('.nav-item');
     const tabIndex = currentTab === 'history' ? 1 : 0;
     if (navItems[tabIndex]) navItems[tabIndex].classList.add('active');
+}
+
+function renderProjectSettings() {
+    const list = document.getElementById('projectSettingsList');
+    if (!list) return;
+
+    const settings = DB.getSettings();
+    list.innerHTML = settings.projects.map(project => `
+        <div class="project-settings-row">
+            <div>
+                <div class="project-settings-name">${escapeHTML(project.name)}</div>
+                <div class="project-settings-mode">${getModeLabel(project.mode)}</div>
+            </div>
+            <div class="project-settings-actions">
+                <button onclick="renameProject('${project.id}')">重命名</button>
+                <button onclick="deleteProject('${project.id}')">删除</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function addProject() {
+    const nameInput = document.getElementById('newProjectName');
+    const modeSelect = document.getElementById('newProjectMode');
+    const name = nameInput.value.trim();
+    if (!name) {
+        showToast('请输入项目名称', '⚠️');
+        return;
+    }
+
+    const settings = DB.getSettings();
+    settings.projects.push({
+        id: createProjectId(),
+        name,
+        mode: modeSelect.value
+    });
+    DB.saveSettings(settings);
+    nameInput.value = '';
+    renderProjectSettings();
+    renderProjectSelector();
+    showToast('项目已添加', '✅');
+}
+
+function renameProject(projectId) {
+    const settings = DB.getSettings();
+    const project = settings.projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    const name = prompt('请输入新的项目名称', project.name);
+    if (!name || !name.trim()) return;
+
+    project.name = name.trim().slice(0, 12);
+    DB.saveSettings(settings);
+    renderProjectSettings();
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
+    if (currentTab === 'history') renderHistoryPage();
+    showToast('项目已重命名', '✅');
+}
+
+function deleteProject(projectId) {
+    const settings = DB.getSettings();
+    if (settings.projects.length <= 1) {
+        showToast('至少保留一个项目', '⚠️');
+        return;
+    }
+
+    const project = settings.projects.find(p => p.id === projectId);
+    if (!project) return;
+    if (!confirm(`确定删除项目“${project.name}”吗？该项目记录也会删除。`)) return;
+
+    settings.projects = settings.projects.filter(p => p.id !== projectId);
+    if (settings.activeProjectId === projectId) {
+        settings.activeProjectId = settings.projects[0].id;
+    }
+    DB.saveSettings(settings);
+
+    const allRecords = DB.getAllRecords();
+    delete allRecords[projectId];
+    localStorage.setItem('checkin_records', JSON.stringify(allRecords));
+
+    renderProjectSettings();
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
+    showToast('项目已删除', '🗑️');
 }
 
 function clearAllRecords() {

@@ -44,11 +44,11 @@
                         <div class="user-status" id="userStatus">今日未打卡</div>
                     </div>
                 </div>
-                <button class="btn-icon" onclick="resetUser()" title="切换用户">🔄</button>
             </div>
 
             <!-- 打卡卡片 -->
             <div class="checkin-card">
+                <div class="project-selector" id="projectSelector"></div>
                 <div class="checkin-time" id="currentTime">00:00:00</div>
                 <div class="checkin-date" id="todayDate"></div>
                 <div class="checkin-weekday" id="todayWeekday"></div>
@@ -136,6 +136,11 @@
                     <div class="stat-value" id="hCompletionRate">-</div>
                     <div class="stat-label">签退完成率</div>
                 </div>
+            </div>
+
+            <div class="section">
+                <h3>📌 项目统计</h3>
+                <div class="project-stats-list" id="projectStatsList"></div>
             </div>
 
             <!-- 本周工时柱状图 -->
