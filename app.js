@@ -630,7 +630,7 @@ function renderTrendChart() {
 
     if (!hasData) {
         container.classList.add('trend-chart-empty');
-        container.innerHTML = '<div class="trend-empty-state"><div class="trend-empty-icon">📝</div><div>暂无打卡记录</div></div>';
+        container.innerHTML = '<div class="trend-empty-state">暂无打卡记录</div>';
         return;
     }
 

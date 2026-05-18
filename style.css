@@ -797,9 +797,9 @@ body {
 #trendChart.trend-chart-empty {
     display: grid;
     place-items: center;
-    min-height: 120px;
+    min-height: 132px;
     height: auto;
-    padding: 16px 0;
+    padding: 20px 0;
     overflow: hidden;
 }
 
@@ -807,12 +807,8 @@ body {
     width: 100%;
     text-align: center;
     color: var(--text-secondary);
-}
-
-.trend-empty-icon {
-    font-size: 36px;
-    line-height: 1;
-    margin-bottom: 10px;
+    font-size: 16px;
+    line-height: 1.5;
 }
 
 .trend-col {
