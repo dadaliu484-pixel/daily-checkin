@@ -71,6 +71,34 @@ function getToday() {
     return formatDate(new Date());
 }
 
+function getSignOutDate(record) {
+    return record.signOutDate || record.date;
+}
+
+function getWorkDurationMinutes(record) {
+    if (!record || !record.signIn || !record.signOut) return 0;
+    const signInDateTime = new Date(`${record.date}T${record.signIn}`);
+    const signOutDateTime = new Date(`${getSignOutDate(record)}T${record.signOut}`);
+
+    if (Number.isNaN(signInDateTime.getTime()) || Number.isNaN(signOutDateTime.getTime())) {
+        return 0;
+    }
+
+    if (signOutDateTime < signInDateTime && !record.signOutDate) {
+        signOutDateTime.setDate(signOutDateTime.getDate() + 1);
+    }
+
+    return Math.max(0, Math.round((signOutDateTime - signInDateTime) / (1000 * 60)));
+}
+
+function findLatestOpenRecordDate(upToDateStr = getToday()) {
+    const records = DB.getRecords();
+    return Object.keys(records)
+        .filter(date => date <= upToDateStr && records[date].signIn && !records[date].signOut)
+        .sort()
+        .reverse()[0] || null;
+}
+
 // ===== Toast 提示 =====
 function showToast(message, icon = '✅') {
     let toast = document.querySelector('.toast');
@@ -171,8 +199,14 @@ function loadTodayInfo() {
     document.getElementById('todayDate').textContent = today;
     document.getElementById('todayWeekday').textContent = getWeekday(now);
 
-    // 从 localStorage 读取今日打卡记录
-    const record = DB.getDayRecord(today);
+    // 从 localStorage 读取今日打卡记录；如果有跨天未签退记录，优先展示它用于签退
+    let record = DB.getDayRecord(today);
+    if (!record || !record.signIn) {
+        const openRecordDate = findLatestOpenRecordDate(today);
+        if (openRecordDate) {
+            record = DB.getDayRecord(openRecordDate);
+        }
+    }
     updateTodayUI(record);
 }
 
@@ -212,14 +246,17 @@ function updateTodayUI(record) {
     // 显示今日的签到/签退时间
     let html = '';
     if (record.signIn) {
+        const signInLabel = record.date !== getToday() ? `✅ 签到上班（${record.date}）` : '✅ 签到上班';
         html += `<div class="record-item">
-            <span class="record-label">✅ 签到上班</span>
+            <span class="record-label">${signInLabel}</span>
             <span class="record-time record-type-signin">${record.signIn}</span>
         </div>`;
     }
     if (record.signOut) {
+        const signOutDate = getSignOutDate(record);
+        const signOutLabel = signOutDate !== record.date ? `🏁 签退下班（${signOutDate}）` : '🏁 签退下班';
         html += `<div class="record-item">
-            <span class="record-label">🏁 签退下班</span>
+            <span class="record-label">${signOutLabel}</span>
             <span class="record-time record-type-signout">${record.signOut}</span>
         </div>`;
     }
@@ -234,6 +271,12 @@ function signIn() {
     const today = getToday();
     const now = new Date();
     const time = formatTime(now);
+
+    const openRecordDate = findLatestOpenRecordDate(today);
+    if (openRecordDate && openRecordDate !== today) {
+        showToast(`请先签退 ${openRecordDate} 的记录！`, '⚠️');
+        return;
+    }
 
     let record = DB.getDayRecord(today);
     if (!record) {
@@ -263,7 +306,8 @@ function signOut() {
     const now = new Date();
     const time = formatTime(now);
 
-    let record = DB.getDayRecord(today);
+    const recordDate = findLatestOpenRecordDate(today);
+    let record = recordDate ? DB.getDayRecord(recordDate) : null;
     if (!record || !record.signIn) {
         showToast('请先签到！', '⚠️');
         return;
@@ -276,10 +320,11 @@ function signOut() {
 
     // 保存签退时间到 localStorage
     record.signOut = time;
-    DB.setDayRecord(today, record);
+    record.signOutDate = today;
+    DB.setDayRecord(recordDate, record);
     
     showToast(`签退成功！${time} 下班啦！`, '🏁');
-    updateTodayUI(record);
+    loadTodayInfo();
     updateStats();
     loadRecords();
     updateCalendar();
@@ -302,8 +347,10 @@ function updateStats() {
     const monthDays = days.filter(d => d.startsWith(monthPrefix)).length;
     document.getElementById('monthDays').textContent = monthDays;
 
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
     const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setDate(now.getDate() + mondayOffset);
     const weekStartStr = formatDate(weekStart);
     const weekDays = days.filter(d => d >= weekStartStr && d <= today).length;
     document.getElementById('thisWeek').textContent = weekDays;
@@ -364,9 +411,7 @@ function loadRecords() {
 
         let workDuration = '';
         if (record.signIn && record.signOut) {
-            const [inH, inM] = record.signIn.split(':').map(Number);
-            const [outH, outM] = record.signOut.split(':').map(Number);
-            const diffMinutes = (outH * 60 + outM) - (inH * 60 + inM);
+            const diffMinutes = getWorkDurationMinutes(record);
             if (diffMinutes > 0) {
                 const hours = Math.floor(diffMinutes / 60);
                 const mins = diffMinutes % 60;
@@ -380,7 +425,7 @@ function loadRecords() {
                     <div class="record-date">${displayDate}</div>
                     <div class="record-times">
                         <span class="in-time">${record.signIn}</span>
-                        ${record.signOut ? ` → <span class="out-time">${record.signOut}</span>` : ''}
+                        ${record.signOut ? ` → <span class="out-time">${getSignOutDate(record) !== day ? `${getSignOutDate(record)} ` : ''}${record.signOut}</span>` : ''}
                         ${workDuration}
                     </div>
                 </div>
@@ -478,9 +523,9 @@ function getRecordsWithDuration() {
         if (!r.signIn) return;
         let duration = 0;
         if (r.signIn && r.signOut) {
-            duration = parseTimeToMinutes(r.signOut) - parseTimeToMinutes(r.signIn);
+            duration = getWorkDurationMinutes(r);
         }
-        result.push({ date, signIn: r.signIn, signOut: r.signOut, duration });
+        result.push({ date, signIn: r.signIn, signOut: r.signOut, signOutDate: getSignOutDate(r), duration });
     });
     result.sort((a, b) => a.date.localeCompare(b.date));
     return result;
@@ -505,7 +550,7 @@ function getWeeklyData() {
         let status = 'none';
         if (record && record.signIn) {
             if (record.signOut) {
-                duration = parseTimeToMinutes(record.signOut) - parseTimeToMinutes(record.signIn);
+                duration = getWorkDurationMinutes(record);
                 status = 'full';
             } else {
                 status = 'partial';
