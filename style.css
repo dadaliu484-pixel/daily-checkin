@@ -295,6 +295,23 @@ body {
     color: var(--primary);
 }
 
+.add-project-main {
+    width: 100%;
+    border: 2px dashed var(--primary-light);
+    border-radius: var(--radius-sm);
+    background: rgba(79, 70, 229, 0.08);
+    color: var(--primary);
+    font-size: 15px;
+    font-weight: 700;
+    padding: 12px;
+    margin-bottom: 16px;
+    cursor: pointer;
+}
+
+.add-project-main:active {
+    transform: scale(0.98);
+}
+
 .checkin-btn-group {
     display: flex;
     gap: 12px;

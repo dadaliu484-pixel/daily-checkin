@@ -1125,6 +1125,19 @@ function renderProjectSettings() {
     `).join('');
 }
 
+function createProject(name, mode) {
+    const settings = DB.getSettings();
+    const project = {
+        id: createProjectId(),
+        name,
+        mode
+    };
+    settings.projects.push(project);
+    settings.activeProjectId = project.id;
+    DB.saveSettings(settings);
+    return project;
+}
+
 function addProject() {
     const nameInput = document.getElementById('newProjectName');
     const modeSelect = document.getElementById('newProjectMode');
@@ -1134,17 +1147,30 @@ function addProject() {
         return;
     }
 
-    const settings = DB.getSettings();
-    settings.projects.push({
-        id: createProjectId(),
-        name,
-        mode: modeSelect.value
-    });
-    DB.saveSettings(settings);
+    createProject(name, modeSelect.value);
     nameInput.value = '';
     renderProjectSettings();
     renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
     showToast('项目已添加', '✅');
+}
+
+function showAddProjectDialog() {
+    const name = prompt('请输入新打卡项目名称');
+    if (!name || !name.trim()) return;
+
+    const modeText = prompt('请选择模式：输入 1 为签到/签退模式，输入 2 为单次打卡模式', '1');
+    const mode = modeText === '2' ? 'single' : 'range';
+    const project = createProject(name.trim().slice(0, 12), mode);
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
+    showToast(`已添加 ${project.name}`, '✅');
 }
 
 function renameProject(projectId) {
