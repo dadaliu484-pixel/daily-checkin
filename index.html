@@ -48,9 +48,10 @@
 
             <!-- 打卡卡片 -->
             <div class="checkin-card">
-                <div class="project-selector" id="projectSelector"></div>
-                <button class="add-project-main" onclick="showAddProjectDialog()">＋ 添加打卡项目</button>
-                <button class="reset-records-main" onclick="resetRecordsForTesting()">清空记录重新测试</button>
+                <div class="project-selector-row">
+                    <div class="project-selector" id="projectSelector"></div>
+                    <button class="btn-icon project-add-btn" onclick="showAddProjectDialog()" title="&#28155;&#21152;&#25171;&#21345;&#39033;&#30446;" aria-label="&#28155;&#21152;&#25171;&#21345;&#39033;&#30446;">+</button>
+                </div>
                 <div class="checkin-time" id="currentTime">00:00:00</div>
                 <div class="checkin-date" id="todayDate"></div>
                 <div class="checkin-weekday" id="todayWeekday"></div>
@@ -99,7 +100,7 @@
                 </div>
                 
                 <!-- 日历视图 -->
-                <div id="calendarView" class="calendar-container" style="display:none;">
+                <div id="calendarView" class="calendar-container">
                     <div class="calendar-nav">
                         <button class="btn-icon" onclick="changeMonth(-1)">◀</button>
                         <span id="calendarMonthTitle">2026年5月</span>

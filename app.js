@@ -10,6 +10,22 @@ const DEFAULT_PROJECTS = [
     { id: 'fitness', name: '健身', mode: 'single' }
 ];
 
+const DEFAULT_PROJECT_GOALS = {
+    weeklyDays: 0,
+    monthlyDays: 0,
+    dailyMinutes: 0
+};
+
+const DEFAULT_PROJECT_REST_DAYS = {
+    weekly: [],
+    dates: []
+};
+
+const HOLIDAYS = {
+    '2026-01-01': '\u5143\u65e6',
+    '2026-05-01': '\u52b3\u52a8\u8282'
+};
+
 const STORAGE_KEYS = {
     records: 'checkin_records',
     settings: 'checkin_settings',
@@ -60,6 +76,38 @@ function parseJSONValue(value, fallback) {
 }
 
 // ===== 数据管理 - 使用 localStorage 持久化存储 =====
+function clampInteger(value, min, max) {
+    const number = Number.parseInt(value, 10);
+    if (!Number.isFinite(number)) return min;
+    return Math.min(max, Math.max(min, number));
+}
+
+function normalizeProjectGoals(goals) {
+    const source = goals && typeof goals === 'object' ? goals : {};
+    return {
+        weeklyDays: clampInteger(source.weeklyDays, 0, 7),
+        monthlyDays: clampInteger(source.monthlyDays, 0, 31),
+        dailyMinutes: clampInteger(source.dailyMinutes, 0, 1440)
+    };
+}
+
+function isValidDateString(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = new Date(`${value}T00:00:00`);
+    return !Number.isNaN(date.getTime()) && formatDate(date) === value;
+}
+
+function normalizeProjectRestDays(restDays) {
+    const source = restDays && typeof restDays === 'object' ? restDays : {};
+    const weekly = Array.isArray(source.weekly)
+        ? [...new Set(source.weekly.map(day => Number.parseInt(day, 10)).filter(day => Number.isInteger(day) && day >= 0 && day <= 6))].sort((a, b) => a - b)
+        : [];
+    const dates = Array.isArray(source.dates)
+        ? [...new Set(source.dates.filter(isValidDateString))].sort()
+        : [];
+    return { weekly, dates };
+}
+
 const DB = {
     getRecords(projectId = this.getActiveProjectId()) {
         const allRecords = this.getAllRecords();
@@ -106,16 +154,26 @@ const DB = {
 
     normalizeProjects(projects) {
         if (!Array.isArray(projects) || projects.length === 0) {
-            return DEFAULT_PROJECTS.map(project => ({ ...project }));
+            return DEFAULT_PROJECTS.map(project => ({
+                ...project,
+                goals: normalizeProjectGoals(project.goals),
+                restDays: normalizeProjectRestDays(project.restDays)
+            }));
         }
         const normalized = projects
             .filter(project => project && project.id && project.name)
             .map(project => ({
                 id: project.id,
                 name: project.name,
-                mode: project.mode === 'single' ? 'single' : 'range'
+                mode: project.mode === 'single' ? 'single' : 'range',
+                goals: normalizeProjectGoals(project.goals),
+                restDays: normalizeProjectRestDays(project.restDays)
             }));
-        return normalized.length > 0 ? normalized : DEFAULT_PROJECTS.map(project => ({ ...project }));
+        return normalized.length > 0 ? normalized : DEFAULT_PROJECTS.map(project => ({
+            ...project,
+            goals: normalizeProjectGoals(project.goals),
+            restDays: normalizeProjectRestDays(project.restDays)
+        }));
     },
 
     getProjects() {
@@ -400,6 +458,7 @@ function initApp() {
         loadTodayInfo();  // 从 localStorage 读取今日打卡状态
         updateStats();
         loadRecords();
+        updateCalendar();
         startClock();
     } else {
         // 首次使用，显示欢迎页
@@ -433,17 +492,36 @@ function loadUserInfo() {
     document.getElementById('userAvatar').textContent = avatarEmojis[avatarIndex];
 }
 
+function formatProjectGoalSummary(project) {
+    const goals = normalizeProjectGoals(project.goals);
+    const parts = [];
+    if (goals.weeklyDays > 0) {
+        parts.push(`\u5468${goals.weeklyDays}\u5929`);
+    }
+    if (goals.monthlyDays > 0) {
+        parts.push(`\u6708${goals.monthlyDays}\u5929`);
+    }
+    if (project.mode === 'range' && goals.dailyMinutes > 0) {
+        parts.push(`\u65e5${minutesToHM(goals.dailyMinutes)}`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : '\u672a\u8bbe\u76ee\u6807';
+}
+
 function renderProjectSelector() {
     const selector = document.getElementById('projectSelector');
     if (!selector) return;
 
     const settings = DB.getSettings();
-    selector.innerHTML = settings.projects.map(project => `
+    selector.innerHTML = settings.projects.map(project => {
+        const goalSummary = formatProjectGoalSummary(project);
+        return `
         <button class="project-tab ${project.id === settings.activeProjectId ? 'active' : ''}" onclick="switchProject('${project.id}')">
-            <span>${escapeHTML(project.name)}</span>
-            <small>${getModeLabel(project.mode)}</small>
+            <span class="project-tab-name">${escapeHTML(project.name)}</span>
+            <small class="project-tab-mode">${getModeLabel(project.mode)}</small>
+            <small class="project-tab-goal">${escapeHTML(goalSummary)}</small>
         </button>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function switchProject(projectId) {
@@ -774,7 +852,7 @@ function loadRecords() {
 
 // ===== 日历视图 =====
 let calendarCurrentMonth = new Date();
-let calendarVisible = false;
+let calendarVisible = true;
 
 function toggleCalendar() {
     calendarVisible = !calendarVisible;
@@ -790,6 +868,25 @@ function changeMonth(delta) {
     renderCalendar();
 }
 
+function getCalendarRecordState(record) {
+    if (!record || !isRecordStarted(record)) {
+        return { className: '', label: '' };
+    }
+    if (isRecordCompleted(record)) {
+        return { className: ' checked', label: '\u5df2' };
+    }
+    return { className: ' partial', label: '\u4e2d' };
+}
+
+function getHolidayName(dateStr) {
+    return HOLIDAYS[dateStr] || '';
+}
+
+function isProjectRestDay(project, dateStr, dateObj) {
+    const restDays = normalizeProjectRestDays(project.restDays);
+    return restDays.weekly.includes(dateObj.getDay()) || restDays.dates.includes(dateStr);
+}
+
 function renderCalendar() {
     const year = calendarCurrentMonth.getFullYear();
     const month = calendarCurrentMonth.getMonth();
@@ -801,6 +898,7 @@ function renderCalendar() {
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const today = getToday();
     const records = DB.getRecords();
+    const project = DB.getActiveProject();
 
     let html = '';
     
@@ -809,32 +907,56 @@ function renderCalendar() {
     }
 
     for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = formatDate(new Date(year, month, d));
+        const dateObj = new Date(year, month, d);
+        const dateStr = formatDate(dateObj);
         let classes = 'calendar-day';
+        let label = '';
+        const holidayName = getHolidayName(dateStr);
+        const isRestDay = isProjectRestDay(project, dateStr, dateObj);
         
         if (dateStr === today) {
             classes += ' today';
         }
-        
-        const record = records[dateStr];
-        if (record) {
-            if (isRecordCompleted(record)) {
-                classes += ' checked';
-            } else if (isRecordStarted(record)) {
-                classes += ' partial';
-            }
+
+        if (dateObj.getDay() === 0 || dateObj.getDay() === 6) {
+            classes += ' weekend';
         }
 
-        html += `<div class="${classes}">${d}</div>`;
+        if (holidayName) {
+            classes += ' holiday';
+        }
+
+        if (isRestDay) {
+            classes += ' rest-day';
+        }
+        
+        const record = records[dateStr];
+        const recordState = getCalendarRecordState(record);
+        classes += recordState.className;
+        label = recordState.label;
+
+        if (!label && holidayName) {
+            label = '\u5047';
+        } else if (!label && isRestDay) {
+            label = '\u4f11';
+        }
+
+        if (!recordState.className && !holidayName && !isRestDay && dateStr < today) {
+            classes += ' missed';
+            label = '\u672a';
+        }
+
+        html += `<div class="${classes}">
+            <span class="calendar-date-num">${d}</span>
+            ${label ? `<span class="calendar-status-label">${label}</span>` : ''}
+        </div>`;
     }
 
     document.getElementById('calendarDays').innerHTML = html;
 }
 
 function updateCalendar() {
-    if (calendarVisible) {
-        renderCalendar();
-    }
+    renderCalendar();
 }
 
 // ===== 统计页面 =====
@@ -1271,6 +1393,9 @@ function showSettings() {
             <button onclick="importJSON()" style="width:100%;padding:10px;border:none;border-radius:var(--radius-sm);background:var(--primary);color:white;font-size:14px;font-weight:600;cursor:pointer;">\u5bfc\u5165 JSON</button>
             <input id="jsonImportInput" type="file" accept="application/json,.json" onchange="handleJSONImportFile(this)" style="display:none;">
         </div>
+        <div style="border-top:1px solid var(--border);padding-top:16px;margin-bottom:8px;">
+            <div style="font-size:13px;color:var(--danger);font-weight:700;margin-bottom:8px;">\u5371\u9669\u64cd\u4f5c</div>
+        </div>
         <button onclick="clearAllRecords()" style="width:100%;padding:12px;border:2px solid #EF4444;border-radius:var(--radius-sm);background:rgba(239,68,68,0.08);color:#EF4444;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:8px;">
             🗑️ 清空所有打卡记录
         </button>
@@ -1308,6 +1433,8 @@ function renderProjectSettings() {
                 <div class="project-settings-mode">${getModeLabel(project.mode)}</div>
             </div>
             <div class="project-settings-actions">
+                <button onclick="showProjectGoalsDialog('${project.id}')">\u76ee\u6807\u8bbe\u7f6e</button>
+                <button onclick="showProjectRestDaysDialog('${project.id}')">\u4f11\u606f\u65e5\u8bbe\u7f6e</button>
                 <button onclick="renameProject('${project.id}')">重命名</button>
                 <button onclick="deleteProject('${project.id}')">删除</button>
             </div>
@@ -1315,12 +1442,205 @@ function renderProjectSettings() {
     `).join('');
 }
 
+function showProjectGoalsDialog(projectId) {
+    if (document.getElementById('projectGoalsOverlay')) return;
+
+    const settings = DB.getSettings();
+    const project = settings.projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    const goals = normalizeProjectGoals(project.goals);
+    const dailyGoalField = project.mode === 'range' ? `
+        <label class="goal-field">
+            <span>\u6bcf\u65e5\u76ee\u6807\u65f6\u957f\uff08\u5206\u949f\uff09</span>
+            <input type="number" id="goalDailyMinutes" min="0" max="1440" step="1" inputmode="numeric" value="${goals.dailyMinutes}">
+        </label>
+    ` : '';
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'projectGoalsOverlay';
+    overlay.innerHTML = `
+        <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="projectGoalsTitle">
+            <h3 id="projectGoalsTitle">\u76ee\u6807\u8bbe\u7f6e</h3>
+            <div class="goal-project-name">${escapeHTML(project.name)}</div>
+            <div class="goal-form">
+                <label class="goal-field">
+                    <span>\u6bcf\u5468\u76ee\u6807\uff08\u5929\uff09</span>
+                    <input type="number" id="goalWeeklyDays" min="0" max="7" step="1" inputmode="numeric" value="${goals.weeklyDays}">
+                </label>
+                <label class="goal-field">
+                    <span>\u6bcf\u6708\u76ee\u6807\uff08\u5929\uff09</span>
+                    <input type="number" id="goalMonthlyDays" min="0" max="31" step="1" inputmode="numeric" value="${goals.monthlyDays}">
+                </label>
+                ${dailyGoalField}
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="modal-secondary" onclick="closeProjectGoalsDialog()">\u53d6\u6d88</button>
+                <button type="button" class="modal-primary" onclick="submitProjectGoalsDialog('${project.id}')">\u4fdd\u5b58</button>
+            </div>
+        </div>
+    `;
+    overlay.onclick = function(e) { if (e.target === overlay) closeProjectGoalsDialog(); };
+    document.body.appendChild(overlay);
+    document.getElementById('goalWeeklyDays').focus();
+}
+
+function closeProjectGoalsDialog() {
+    const overlay = document.getElementById('projectGoalsOverlay');
+    if (overlay) overlay.remove();
+}
+
+function submitProjectGoalsDialog(projectId) {
+    const settings = DB.getSettings();
+    const project = settings.projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    const weeklyInput = document.getElementById('goalWeeklyDays');
+    const monthlyInput = document.getElementById('goalMonthlyDays');
+    const dailyInput = document.getElementById('goalDailyMinutes');
+    project.goals = normalizeProjectGoals({
+        weeklyDays: weeklyInput ? weeklyInput.value : 0,
+        monthlyDays: monthlyInput ? monthlyInput.value : 0,
+        dailyMinutes: project.mode === 'range' && dailyInput ? dailyInput.value : 0
+    });
+
+    DB.saveSettings(settings);
+    closeProjectGoalsDialog();
+    renderProjectSettings();
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
+    showToast('\u76ee\u6807\u5df2\u4fdd\u5b58', '\u2705');
+}
+
+function renderRestDateList() {
+    const list = document.getElementById('restDateList');
+    if (!list) return;
+
+    const dates = JSON.parse(list.dataset.dates || '[]').filter(isValidDateString).sort();
+    list.dataset.dates = JSON.stringify(dates);
+    if (dates.length === 0) {
+        list.innerHTML = `<div class="rest-date-empty">\u6682\u65e0\u81ea\u5b9a\u4e49\u4f11\u606f\u65e5</div>`;
+        return;
+    }
+    list.innerHTML = dates.map(date => `
+        <div class="rest-date-row">
+            <span>${escapeHTML(date)}</span>
+            <button type="button" onclick="removeRestDate('${date}')">\u5220\u9664</button>
+        </div>
+    `).join('');
+}
+
+function addRestDate() {
+    const input = document.getElementById('restDateInput');
+    const list = document.getElementById('restDateList');
+    if (!input || !list) return;
+
+    const date = input.value;
+    if (!isValidDateString(date)) {
+        showToast('\u8bf7\u9009\u62e9\u6709\u6548\u65e5\u671f', '\u26a0\ufe0f');
+        return;
+    }
+
+    const dates = JSON.parse(list.dataset.dates || '[]');
+    if (!dates.includes(date)) {
+        dates.push(date);
+    }
+    list.dataset.dates = JSON.stringify(dates);
+    input.value = '';
+    renderRestDateList();
+}
+
+function removeRestDate(date) {
+    const list = document.getElementById('restDateList');
+    if (!list || !isValidDateString(date)) return;
+
+    const dates = JSON.parse(list.dataset.dates || '[]').filter(item => item !== date);
+    list.dataset.dates = JSON.stringify(dates);
+    renderRestDateList();
+}
+
+function showProjectRestDaysDialog(projectId) {
+    if (document.getElementById('projectRestDaysOverlay')) return;
+
+    const settings = DB.getSettings();
+    const project = settings.projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    const restDays = normalizeProjectRestDays(project.restDays);
+    const weekLabels = ['\u5468\u65e5', '\u5468\u4e00', '\u5468\u4e8c', '\u5468\u4e09', '\u5468\u56db', '\u5468\u4e94', '\u5468\u516d'];
+    const weeklyOptions = weekLabels.map((label, index) => `
+        <label class="rest-weekday-option">
+            <input type="checkbox" name="restWeeklyDay" value="${index}" ${restDays.weekly.includes(index) ? 'checked' : ''}>
+            <span>${label}</span>
+        </label>
+    `).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'projectRestDaysOverlay';
+    overlay.innerHTML = `
+        <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="projectRestDaysTitle">
+            <h3 id="projectRestDaysTitle">\u4f11\u606f\u65e5\u8bbe\u7f6e</h3>
+            <div class="goal-project-name">${escapeHTML(project.name)}</div>
+            <div class="rest-days-form">
+                <div class="rest-days-title">\u6bcf\u5468\u56fa\u5b9a\u4f11\u606f\u65e5</div>
+                <div class="rest-weekday-grid">${weeklyOptions}</div>
+                <div class="rest-days-title">\u81ea\u5b9a\u4e49\u4f11\u606f\u65e5</div>
+                <div class="rest-date-input-row">
+                    <input type="date" id="restDateInput">
+                    <button type="button" onclick="addRestDate()">\u6dfb\u52a0</button>
+                </div>
+                <div id="restDateList" class="rest-date-list" data-dates='${JSON.stringify(restDays.dates)}'></div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="modal-secondary" onclick="closeProjectRestDaysDialog()">\u53d6\u6d88</button>
+                <button type="button" class="modal-primary" onclick="submitProjectRestDaysDialog('${project.id}')">\u4fdd\u5b58</button>
+            </div>
+        </div>
+    `;
+    overlay.onclick = function(e) { if (e.target === overlay) closeProjectRestDaysDialog(); };
+    document.body.appendChild(overlay);
+    renderRestDateList();
+}
+
+function closeProjectRestDaysDialog() {
+    const overlay = document.getElementById('projectRestDaysOverlay');
+    if (overlay) overlay.remove();
+}
+
+function submitProjectRestDaysDialog(projectId) {
+    const settings = DB.getSettings();
+    const project = settings.projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    const weekly = Array.from(document.querySelectorAll('input[name="restWeeklyDay"]:checked')).map(input => input.value);
+    const list = document.getElementById('restDateList');
+    const dates = list ? JSON.parse(list.dataset.dates || '[]') : [];
+    project.restDays = normalizeProjectRestDays({ weekly, dates });
+
+    DB.saveSettings(settings);
+    closeProjectRestDaysDialog();
+    renderProjectSettings();
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
+    showToast('\u4f11\u606f\u65e5\u5df2\u4fdd\u5b58', '\u2705');
+}
+
 function createProject(name, mode) {
     const settings = DB.getSettings();
     const project = {
         id: createProjectId(),
         name,
-        mode
+        mode,
+        goals: { ...DEFAULT_PROJECT_GOALS },
+        restDays: { ...DEFAULT_PROJECT_REST_DAYS }
     };
     settings.projects.push(project);
     settings.activeProjectId = project.id;
@@ -1338,6 +1658,7 @@ function addProject() {
     }
 
     createProject(name, modeSelect.value);
+    updateCalendar();
     nameInput.value = '';
     renderProjectSettings();
     renderProjectSelector();
@@ -1347,22 +1668,64 @@ function addProject() {
     showToast('项目已添加', '✅');
 }
 
-function showAddProjectDialog() {
-    const name = prompt('请输入新打卡项目名称');
-    if (!name || !name.trim()) return;
-
-    const modeText = prompt('请选择模式：输入 1 为签到/签退模式，输入 2 为单次打卡模式', '1');
-    const mode = modeText === '2' ? 'single' : 'range';
+function finishAddProject(name, mode) {
     const project = createProject(name.trim().slice(0, 12), mode);
     renderProjectSelector();
     loadTodayInfo();
     updateStats();
     loadRecords();
     updateCalendar();
+    updateCalendar();
     if (currentTab === 'history') renderHistoryPage();
-    showToast(`已添加 ${project.name}`, '✅');
+    showToast(`\u5df2\u6dfb\u52a0 ${project.name}`, '\u2705');
+    return project;
 }
 
+function showAddProjectDialog() {
+    if (document.getElementById('addProjectOverlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'addProjectOverlay';
+    overlay.innerHTML = `
+        <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="addProjectTitle">
+            <h3 id="addProjectTitle">\u6dfb\u52a0\u6253\u5361\u9879\u76ee</h3>
+            <div class="project-form">
+                <input type="text" id="quickProjectName" placeholder="\u9879\u76ee\u540d\u79f0" maxlength="12">
+                <select id="quickProjectMode">
+                    <option value="range">\u7b7e\u5230/\u7b7e\u9000\u6a21\u5f0f</option>
+                    <option value="single">\u5355\u6b21\u6253\u5361\u6a21\u5f0f</option>
+                </select>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="modal-secondary" onclick="closeAddProjectDialog()">\u53d6\u6d88</button>
+                <button type="button" class="modal-primary" onclick="submitAddProjectDialog()">\u6dfb\u52a0</button>
+            </div>
+        </div>
+    `;
+    overlay.onclick = function(e) { if (e.target === overlay) closeAddProjectDialog(); };
+    document.body.appendChild(overlay);
+    document.getElementById('quickProjectName').focus();
+}
+
+function closeAddProjectDialog() {
+    const overlay = document.getElementById('addProjectOverlay');
+    if (overlay) overlay.remove();
+}
+
+function submitAddProjectDialog() {
+    const nameInput = document.getElementById('quickProjectName');
+    const modeSelect = document.getElementById('quickProjectMode');
+    const name = nameInput.value.trim();
+    if (!name) {
+        showToast('\u8bf7\u8f93\u5165\u9879\u76ee\u540d\u79f0', '\u26a0\ufe0f');
+        nameInput.focus();
+        return;
+    }
+
+    finishAddProject(name, modeSelect.value);
+    closeAddProjectDialog();
+}
 function renameProject(projectId) {
     const settings = DB.getSettings();
     const project = settings.projects.find(p => p.id === projectId);
@@ -1413,42 +1776,36 @@ function deleteProject(projectId) {
     showToast('项目已删除', '🗑️');
 }
 
+function clearStoredRecords() {
+    safeStorageRemove(STORAGE_KEYS.records);
+    refreshAllViews();
+}
+
 function clearAllRecords() {
-    if (confirm('⚠️ 确定要清空所有打卡记录吗？\n此操作不可恢复！')) {
-        if (confirm('再次确认：真的要删除所有记录吗？')) {
-            safeStorageRemove(STORAGE_KEYS.records);
-            loadTodayInfo();
-            updateStats();
-            loadRecords();
-            updateCalendar();
-            if (currentTab === 'history') renderHistoryPage();
-            closeSettings();
-            showToast('所有打卡记录已清空', '🗑️');
-        }
-    }
+    const message = '\u786e\u5b9a\u8981\u6e05\u7a7a\u6240\u6709\u6253\u5361\u8bb0\u5f55\u5417\uff1f\n\u6b64\u64cd\u4f5c\u4e0d\u53ef\u6062\u590d\uff0c\u4f46\u4e0d\u4f1a\u5220\u9664\u9879\u76ee\u914d\u7f6e\u3002';
+    if (!confirm(message)) return;
+    if (!confirm('\u518d\u6b21\u786e\u8ba4\uff1a\u6e05\u7a7a\u540e\u6240\u6709\u6253\u5361\u8bb0\u5f55\u90fd\u65e0\u6cd5\u6062\u590d\uff0c\u9879\u76ee\u914d\u7f6e\u4f1a\u4fdd\u7559\u3002')) return;
+    clearStoredRecords();
+    closeSettings();
+    showToast('\u6240\u6709\u6253\u5361\u8bb0\u5f55\u5df2\u6e05\u7a7a', '\ud83d\uddd1\ufe0f');
 }
 
 function resetRecordsForTesting() {
-    if (!confirm('确定清空所有项目的打卡记录，从零开始测试吗？')) return;
-    safeStorageRemove(STORAGE_KEYS.records);
-    loadTodayInfo();
-    updateStats();
-    loadRecords();
-    updateCalendar();
-    if (currentTab === 'history') renderHistoryPage();
-    showToast('记录已清空，可以重新测试', '🧪');
+    if (!confirm('\u786e\u5b9a\u6e05\u7a7a\u6240\u6709\u9879\u76ee\u7684\u6253\u5361\u8bb0\u5f55\uff0c\u4ece\u96f6\u5f00\u59cb\u6d4b\u8bd5\u5417\uff1f')) return;
+    clearStoredRecords();
+    showToast('\u8bb0\u5f55\u5df2\u6e05\u7a7a\uff0c\u53ef\u4ee5\u91cd\u65b0\u6d4b\u8bd5', '\ud83e\uddea');
 }
 
-// ===== 设置功能 =====
+// ===== Settings =====
 function toggleRemind(enabled) {
     const settings = DB.getSettings();
     settings.remindEnabled = enabled;
     DB.saveSettings(settings);
     if (enabled) {
-        showToast('打卡提醒已开启', '🔔');
+        showToast('\u6253\u5361\u63d0\u9192\u5df2\u5f00\u542f', '\ud83d\udd14');
         requestNotificationPermission();
     } else {
-        showToast('打卡提醒已关闭', '🔕');
+        showToast('\u6253\u5361\u63d0\u9192\u5df2\u5173\u95ed', '\ud83d\udd15');
     }
 }
 
@@ -1457,10 +1814,6 @@ function requestNotificationPermission() {
         Notification.requestPermission();
     }
 }
-
-// ===== 检查是否到了新的一天（跨天处理）=====
-// 注意：此函数只在日期真正变更时刷新界面
-// 同一天内关闭再打开页面，签到状态完全保留
 function checkNewDay() {
     const lastCheck = safeStorageGet(STORAGE_KEYS.lastDate);
     const today = getToday();
