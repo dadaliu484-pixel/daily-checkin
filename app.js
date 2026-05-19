@@ -10,6 +10,55 @@ const DEFAULT_PROJECTS = [
     { id: 'fitness', name: '健身', mode: 'single' }
 ];
 
+const STORAGE_KEYS = {
+    records: 'checkin_records',
+    settings: 'checkin_settings',
+    lastDate: 'checkin_last_date'
+};
+
+function safeStorageGet(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch (error) {
+        console.warn('localStorage read failed:', key, error);
+        return null;
+    }
+}
+
+function safeStorageSet(key, value) {
+    try {
+        localStorage.setItem(key, value);
+        return true;
+    } catch (error) {
+        console.warn('localStorage write failed:', key, error);
+        showToast('\u672c\u5730\u5b58\u50a8\u5199\u5165\u5931\u8d25', '\u26a0\ufe0f');
+        return false;
+    }
+}
+
+function safeStorageRemove(key) {
+    try {
+        localStorage.removeItem(key);
+        return true;
+    } catch (error) {
+        console.warn('localStorage remove failed:', key, error);
+        showToast('\u672c\u5730\u5b58\u50a8\u5220\u9664\u5931\u8d25', '\u26a0\ufe0f');
+        return false;
+    }
+}
+
+function parseJSONValue(value, fallback) {
+    if (!value) return fallback;
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' ? parsed : fallback;
+    } catch (error) {
+        console.warn('Invalid JSON in localStorage:', error);
+        showToast('\u672c\u5730\u6570\u636e\u635f\u574f\uff0c\u5df2\u4f7f\u7528\u7a7a\u6570\u636e\u542f\u52a8', '\u26a0\ufe0f');
+        return fallback;
+    }
+}
+
 // ===== 数据管理 - 使用 localStorage 持久化存储 =====
 const DB = {
     getRecords(projectId = this.getActiveProjectId()) {
@@ -20,24 +69,26 @@ const DB = {
     saveRecords(records, projectId = this.getActiveProjectId()) {
         const allRecords = this.getAllRecords();
         allRecords[projectId] = records;
-        localStorage.setItem('checkin_records', JSON.stringify(allRecords));
+        safeStorageSet(STORAGE_KEYS.records, JSON.stringify(allRecords));
     },
 
     getAllRecords() {
-        const data = localStorage.getItem('checkin_records');
-        const records = data ? JSON.parse(data) : {};
+        const records = parseJSONValue(safeStorageGet(STORAGE_KEYS.records), {});
         const values = Object.values(records);
         const isLegacyRecords = values.some(record => record && (record.signIn || record.signOut || record.completedAt || record.date));
         return isLegacyRecords ? { work: records } : records;
     },
 
+    saveAllRecords(records) {
+        safeStorageSet(STORAGE_KEYS.records, JSON.stringify(records && typeof records === 'object' ? records : {}));
+    },
+
     getSettings() {
-        const data = localStorage.getItem('checkin_settings');
-        const settings = data ? JSON.parse(data) : {
+        const settings = parseJSONValue(safeStorageGet(STORAGE_KEYS.settings), {
             name: '',
             remindEnabled: false,
             remindTime: '08:00'
-        };
+        });
         settings.projects = this.normalizeProjects(settings.projects);
         if (!settings.activeProjectId || !settings.projects.some(p => p.id === settings.activeProjectId)) {
             settings.activeProjectId = settings.projects[0].id;
@@ -50,20 +101,21 @@ const DB = {
         if (!settings.activeProjectId || !settings.projects.some(p => p.id === settings.activeProjectId)) {
             settings.activeProjectId = settings.projects[0].id;
         }
-        localStorage.setItem('checkin_settings', JSON.stringify(settings));
+        safeStorageSet(STORAGE_KEYS.settings, JSON.stringify(settings));
     },
 
     normalizeProjects(projects) {
         if (!Array.isArray(projects) || projects.length === 0) {
             return DEFAULT_PROJECTS.map(project => ({ ...project }));
         }
-        return projects
+        const normalized = projects
             .filter(project => project && project.id && project.name)
             .map(project => ({
                 id: project.id,
                 name: project.name,
                 mode: project.mode === 'single' ? 'single' : 'range'
             }));
+        return normalized.length > 0 ? normalized : DEFAULT_PROJECTS.map(project => ({ ...project }));
     },
 
     getProjects() {
@@ -204,6 +256,136 @@ function showToast(message, icon = '✅') {
     toast.appendChild(messageEl);
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 1500);
+}
+
+function refreshAllViews() {
+    loadUserInfo();
+    renderProjectSelector();
+    loadTodayInfo();
+    updateStats();
+    loadRecords();
+    updateCalendar();
+    if (currentTab === 'history') renderHistoryPage();
+}
+
+function getExportData() {
+    return {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        settings: DB.getSettings(),
+        records: DB.getAllRecords()
+    };
+}
+
+function downloadTextFile(filename, content, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
+function exportJSON() {
+    downloadTextFile(`checkin-backup-${getToday()}.json`, JSON.stringify(getExportData(), null, 2), 'application/json;charset=utf-8');
+    showToast('\u5df2\u5bfc\u51fa JSON', '\u2705');
+}
+
+function csvCell(value) {
+    const text = value === undefined || value === null ? '' : String(value);
+    return `"${text.replace(/"/g, '""')}"`;
+}
+
+function exportCSV() {
+    const records = DB.getAllRecords();
+    const projects = DB.getProjects();
+    const projectMap = Object.fromEntries(projects.map(project => [project.id, project]));
+    const rows = [[
+        'projectId',
+        'projectName',
+        'projectMode',
+        'date',
+        'signIn',
+        'signOut',
+        'signOutDate',
+        'completedAt',
+        'durationMinutes',
+        'status'
+    ]];
+
+    Object.keys(records).forEach(projectId => {
+        const projectRecords = records[projectId] || {};
+        const project = projectMap[projectId] || { id: projectId, name: projectId, mode: '' };
+        Object.keys(projectRecords).sort().forEach(date => {
+            const record = projectRecords[date];
+            if (!isRecordStarted(record)) return;
+            rows.push([
+                projectId,
+                project.name,
+                project.mode,
+                date,
+                record.signIn || '',
+                record.signOut || '',
+                record.signOutDate || '',
+                record.completedAt || '',
+                project.mode === 'range' ? getWorkDurationMinutes(record) : '',
+                isRecordCompleted(record) ? 'completed' : 'partial'
+            ]);
+        });
+    });
+
+    const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
+    downloadTextFile(`checkin-records-${getToday()}.csv`, `\ufeff${csv}`, 'text/csv;charset=utf-8');
+    showToast('\u5df2\u5bfc\u51fa CSV', '\u2705');
+}
+
+function importJSON() {
+    const input = document.getElementById('jsonImportInput');
+    if (input) input.click();
+}
+
+function readImportPayload(payload) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        throw new Error('Invalid payload');
+    }
+    const records = payload.records || payload.checkin_records || payload;
+    const settings = payload.settings || payload.checkin_settings || DB.getSettings();
+    if (!records || typeof records !== 'object' || Array.isArray(records)) {
+        throw new Error('Invalid records');
+    }
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        throw new Error('Invalid settings');
+    }
+    settings.projects = DB.normalizeProjects(settings.projects);
+    if (!settings.activeProjectId || !settings.projects.some(project => project.id === settings.activeProjectId)) {
+        settings.activeProjectId = settings.projects[0].id;
+    }
+    return { records, settings };
+}
+
+function handleJSONImportFile(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function() {
+        try {
+            const payload = JSON.parse(reader.result);
+            const data = readImportPayload(payload);
+            if (!confirm('\u5bfc\u5165 JSON \u4f1a\u8986\u76d6\u5f53\u524d\u672c\u5730\u8bb0\u5f55\uff0c\u786e\u5b9a\u7ee7\u7eed\u5417\uff1f')) return;
+            DB.saveSettings(data.settings);
+            DB.saveAllRecords(data.records);
+            refreshAllViews();
+            showToast('\u5df2\u5bfc\u5165 JSON', '\u2705');
+        } catch (error) {
+            console.warn('JSON import failed:', error);
+            showToast('\u5bfc\u5165\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5 JSON \u6587\u4ef6', '\u26a0\ufe0f');
+        }
+    };
+    reader.readAsText(file, 'utf-8');
 }
 
 // ===== 初始化应用 =====
@@ -1081,6 +1263,14 @@ function showSettings() {
                 </label>
             </div>
         </div>
+        <div style="border-top:1px solid var(--border);padding-top:16px;margin-bottom:12px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                <button onclick="exportJSON()" style="padding:10px;border:none;border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:14px;cursor:pointer;">\u5bfc\u51fa JSON</button>
+                <button onclick="exportCSV()" style="padding:10px;border:none;border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-size:14px;cursor:pointer;">\u5bfc\u51fa CSV</button>
+            </div>
+            <button onclick="importJSON()" style="width:100%;padding:10px;border:none;border-radius:var(--radius-sm);background:var(--primary);color:white;font-size:14px;font-weight:600;cursor:pointer;">\u5bfc\u5165 JSON</button>
+            <input id="jsonImportInput" type="file" accept="application/json,.json" onchange="handleJSONImportFile(this)" style="display:none;">
+        </div>
         <button onclick="clearAllRecords()" style="width:100%;padding:12px;border:2px solid #EF4444;border-radius:var(--radius-sm);background:rgba(239,68,68,0.08);color:#EF4444;font-size:15px;font-weight:600;cursor:pointer;margin-bottom:8px;">
             🗑️ 清空所有打卡记录
         </button>
@@ -1211,7 +1401,7 @@ function deleteProject(projectId) {
 
     const allRecords = DB.getAllRecords();
     delete allRecords[projectId];
-    localStorage.setItem('checkin_records', JSON.stringify(allRecords));
+    DB.saveAllRecords(allRecords);
 
     renderProjectSettings();
     renderProjectSelector();
@@ -1226,7 +1416,7 @@ function deleteProject(projectId) {
 function clearAllRecords() {
     if (confirm('⚠️ 确定要清空所有打卡记录吗？\n此操作不可恢复！')) {
         if (confirm('再次确认：真的要删除所有记录吗？')) {
-            localStorage.removeItem('checkin_records');
+            safeStorageRemove(STORAGE_KEYS.records);
             loadTodayInfo();
             updateStats();
             loadRecords();
@@ -1240,7 +1430,7 @@ function clearAllRecords() {
 
 function resetRecordsForTesting() {
     if (!confirm('确定清空所有项目的打卡记录，从零开始测试吗？')) return;
-    localStorage.removeItem('checkin_records');
+    safeStorageRemove(STORAGE_KEYS.records);
     loadTodayInfo();
     updateStats();
     loadRecords();
@@ -1272,12 +1462,12 @@ function requestNotificationPermission() {
 // 注意：此函数只在日期真正变更时刷新界面
 // 同一天内关闭再打开页面，签到状态完全保留
 function checkNewDay() {
-    const lastCheck = localStorage.getItem('checkin_last_date');
+    const lastCheck = safeStorageGet(STORAGE_KEYS.lastDate);
     const today = getToday();
     
     // 只有日期真的变了（过午夜），才刷新数据
     if (lastCheck !== null && lastCheck !== today) {
-        localStorage.setItem('checkin_last_date', today);
+        safeStorageSet(STORAGE_KEYS.lastDate, today);
         loadTodayInfo();
         updateStats();
         loadRecords();
@@ -1286,7 +1476,7 @@ function checkNewDay() {
     
     // 首次使用，记录今天日期
     if (lastCheck === null) {
-        localStorage.setItem('checkin_last_date', today);
+        safeStorageSet(STORAGE_KEYS.lastDate, today);
     }
 }
 
