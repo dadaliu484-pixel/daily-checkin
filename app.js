@@ -1,5 +1,5 @@
 // ==========================================
-// 每日打卡应用 - 核心逻辑 v2.0
+// 每日打卡应用 - 核心逻辑 v2.1
 // ==========================================
 // 关键特性：只有手动点击"签退"才能结束当日打卡
 
@@ -1674,7 +1674,6 @@ function finishAddProject(name, mode) {
     loadTodayInfo();
     updateStats();
     loadRecords();
-    updateCalendar();
     updateCalendar();
     if (currentTab === 'history') renderHistoryPage();
     showToast(`\u5df2\u6dfb\u52a0 ${project.name}`, '\u2705');

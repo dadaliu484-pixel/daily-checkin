@@ -1,10 +1,10 @@
-# 每日打卡 v2.0 开发交接文档
+# 每日打卡 v2.1 开发交接文档
 
 本文档用于后续继续开发、重构或拆分模块。当前项目是一个纯前端 PWA，没有构建流程，主要由 `index.html`、`style.css`、`app.js`、`sw.js`、`manifest.json` 组成。
 
 ## 1. 项目定位
 
-每日打卡 v2.0 是一个手机优先的多项目打卡 PWA。
+每日打卡 v2.1 是一个手机优先的多项目打卡 PWA。
 
 当前能力：
 
@@ -17,9 +17,10 @@
 - 默认项目：
   - `上班`：`range`
   - `健身`：`single`
-- 首页添加项目。
-- 设置页管理项目。
-- 首页清空记录方便测试。
+- 首页添加项目，使用自定义弹窗选择项目名称和模式。
+- 设置页管理项目，支持目标设置和休息日设置。
+- 设置页支持导出 JSON、导出 CSV、导入 JSON。
+- 日历默认展示，支持已完成、进行中、未打卡、休息日和节假日状态。
 - 统计页按项目展示概览，并展示当前项目的详细统计。
 - 旧版本全局记录自动归入 `上班` 项目。
 - GitHub Pages 托管，手机可直接访问。
@@ -107,8 +108,8 @@ src/
 - `#displayName`：用户名显示。
 - `#userStatus`：当前项目今日状态。
 - `#projectSelector`：项目切换栏。
-- `.add-project-main`：首页添加项目按钮。
-- `.reset-records-main`：首页清空记录重新测试按钮。
+- `.project-selector-row`：项目切换栏和添加按钮外层。
+- `.project-add-btn`：首页添加项目图标按钮。
 - `#currentTime`：实时时钟。
 - `#todayDate`：今日日期。
 - `#todayWeekday`：星期。
@@ -129,7 +130,7 @@ src/
 - `updateStats()`
 - `loadRecords()`
 - `renderCalendar()`
-- `resetRecordsForTesting()`
+- `showAddProjectDialog()`
 
 ### 4.4 统计页
 
@@ -199,8 +200,10 @@ src/
 - 用户栏：`.user-bar`
 - 打卡卡片：`.checkin-card`
 - 项目切换：`.project-selector`、`.project-tab`
-- 首页添加项目：`.add-project-main`
-- 首页测试清空：`.reset-records-main`
+- 首页添加项目：`.project-selector-row`、`.project-add-btn`
+- 通用弹窗：`.modal-overlay`、`.modal-panel`、`.modal-actions`
+- 目标设置：`.goal-*`
+- 休息日设置：`.rest-*`
 - 统计卡片：`.stats-grid`、`.stat-card`
 - 记录列表：`.records-list`、`.record-card`
 - 日历：`.calendar-*`
@@ -244,7 +247,16 @@ styles/
     {
       "id": "work",
       "name": "上班",
-      "mode": "range"
+      "mode": "range",
+      "goals": {
+        "weeklyDays": 5,
+        "monthlyDays": 22,
+        "dailyMinutes": 480
+      },
+      "restDays": {
+        "weekly": [0, 6],
+        "dates": ["2026-05-01"]
+      }
     },
     {
       "id": "fitness",
@@ -271,6 +283,13 @@ styles/
 - `mode`：项目模式，只允许：
   - `range`
   - `single`
+- `goals`：项目目标。
+  - `weeklyDays`：每周目标天数，0-7。
+  - `monthlyDays`：每月目标天数，0-31。
+  - `dailyMinutes`：每日目标时长，0-1440；仅 `range` 项目展示。
+- `restDays`：项目休息日。
+  - `weekly`：每周固定休息日，0 表示周日，6 表示周六。
+  - `dates`：自定义休息日期，格式为 `YYYY-MM-DD`。
 
 ### 6.2 打卡记录：checkin_records
 
@@ -345,6 +364,27 @@ v2.0 后的数据结构：
 
 - `work`：上班，`range`
 - `fitness`：健身，`single`
+
+#### `DEFAULT_PROJECT_GOALS`
+
+默认项目目标：
+
+- `weeklyDays`：0
+- `monthlyDays`：0
+- `dailyMinutes`：0
+
+#### `DEFAULT_PROJECT_REST_DAYS`
+
+默认项目休息日：
+
+- `weekly`：空数组。
+- `dates`：空数组。
+
+#### `HOLIDAYS`
+
+内置节假日映射，用于日历展示“假”状态。
+
+当前只包含少量 2026 年示例日期，后续如需完整法定节假日，需要维护或接入数据源。
 
 用于首次初始化或没有项目时补全。
 
@@ -737,6 +777,18 @@ project_时间戳
 - 今天：`today`
 - 已完成：`checked`
 - 已开始未完成：`partial`
+- 过去未打卡：`missed`
+- 每周或自定义休息日：`rest-day`
+- 内置节假日：`holiday`
+- 周末：`weekend`
+
+日历单元会显示短标签：
+
+- `已`：完成。
+- `中`：进行中。
+- `未`：过去日期未打卡。
+- `休`：项目休息日。
+- `假`：内置节假日。
 
 #### `updateCalendar()`
 
@@ -958,15 +1010,38 @@ project_时间戳
 
 当前实现：
 
-- 使用 `prompt` 输入名称。
-- 再用 `prompt` 选择模式：
-  - `1`：签到/签退。
-  - `2`：单次打卡。
+- 使用自定义弹窗输入项目名称。
+- 使用下拉框选择模式：
+  - `range`：签到/签退。
+  - `single`：单次打卡。
+- 通过 `submitAddProjectDialog()` 提交，内部调用 `finishAddProject()`。
 
 后续建议：
 
-- 改成自定义弹窗，避免 `prompt` 体验粗糙。
 - 模式选择改为按钮或分段控件。
+
+#### `showProjectGoalsDialog(projectId)`
+
+设置页目标设置弹窗。
+
+支持：
+
+- 每周目标天数。
+- 每月目标天数。
+- 每日目标时长，仅 `range` 项目展示。
+
+输入会经过 `normalizeProjectGoals()` 限制范围。
+
+#### `showProjectRestDaysDialog(projectId)`
+
+设置页休息日设置弹窗。
+
+支持：
+
+- 每周固定休息日。
+- 自定义休息日期。
+
+保存后会刷新设置页、项目栏、首页统计、日历和统计页。
 
 #### `renameProject(projectId)`
 
@@ -1062,7 +1137,7 @@ Service Worker：
 当前：
 
 ```js
-const CACHE_NAME = 'checkin-cache-v7';
+const CACHE_NAME = 'checkin-cache-v12';
 ```
 
 每次改动线上资源后，建议升级缓存名。
@@ -1130,7 +1205,8 @@ PWA 配置。
 
 1. 数据只存在浏览器本地。
    - 换手机、清缓存、换浏览器会丢数据。
-   - 建议下一步做导出/导入或云同步。
+   - 当前已有 JSON/CSV 导出和 JSON 导入。
+   - 如果要多设备共享，仍建议后续做云同步。
 
 2. 没有真正后台运行。
    - 手机/电脑关机时不会运行。
@@ -1140,9 +1216,9 @@ PWA 配置。
    - 目前只是保存开关和请求通知权限。
    - 没有按项目、按时间真正推送提醒。
 
-4. 首页添加项目仍使用 `prompt`。
-   - 功能可用，但体验一般。
-   - 建议后续改成自定义 modal。
+4. 内置节假日不完整。
+   - 当前 `HOLIDAYS` 只维护了少量 2026 年示例日期。
+   - 如果日历要长期可靠展示节假日，需要补全数据或接入节假日数据源。
 
 5. `app.js` 过大。
    - 当前超过千行。
@@ -1159,18 +1235,21 @@ PWA 配置。
 
 ## 11. 后续开发路线建议
 
-### 11.1 v2.1：体验优化
+### 11.1 v2.1：当前已完成
 
 - 首页添加项目改成自定义弹窗。
+- 增加项目目标设置。
+- 增加项目休息日设置。
+- 日历默认展示并支持休息日、节假日、未打卡状态。
+- 增加 JSON/CSV 导出和 JSON 导入。
+
+### 11.2 v2.2：体验和统计优化
+
 - 设置页项目管理从字符串模板改成固定 DOM。
 - 项目删除增加更明确的危险态。
 - 单次打卡项目的统计图单独优化。
-
-### 11.2 v2.2：数据安全
-
-- 导出 JSON。
-- 导入 JSON。
-- 导出 CSV。
+- 目标达成率统计。
+- 完整节假日数据维护。
 - 自动备份提醒。
 
 ### 11.3 v3.0：云同步
@@ -1219,10 +1298,10 @@ PWA 配置。
 
 ## 13. 当前 Git 状态
 
-v2.0 已打标签：
+v2.0 曾作为交接版本打标签；当前工作区已进入 v2.1 文档状态，发布时再确认是否补打新标签：
 
 ```text
-v2.0
+v2.0（历史标签）
 ```
 
 当前线上主要功能已上传到 GitHub Pages。
